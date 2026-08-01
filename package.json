@@ -1,0 +1,34 @@
+{
+  "name": "amuselabs",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "test": "node tests/run-runners.mjs",
+    "test:atlantic": "node tests/run-runners.mjs atlantic",
+    "test:dailybeast": "node tests/run-runners.mjs dailybeast",
+    "test:latimes": "node tests/run-runners.mjs latimes",
+    "test:latimesmini": "node tests/run-runners.mjs latimesmini",
+    "test:missingletter": "node tests/run-runners.mjs missingletter",
+    "test:newsday": "node tests/run-runners.mjs newsday",
+    "test:seattletimes": "node tests/run-runners.mjs seattletimes",
+    "test:seattletimesmini": "node tests/run-runners.mjs seattletimesmini",
+    "test:vox": "node tests/run-runners.mjs vox",
+    "test:vulture": "node tests/run-runners.mjs vulture",
+    "build": "gcloud run deploy crossword-decoder --source . --region us-west1 --memory 2Gi --cpu 2 --timeout 300 --concurrency 1 --no-allow-unauthenticated"
+  },
+  "dependencies": {
+    "acorn": "^8.17.0",
+    "acorn-walk": "^8.3.5",
+    "date-fns": "^4.4.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "puppeteer": "^25.3.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.10.4",
+    "vm": "^0.1.0"
+  }
+}

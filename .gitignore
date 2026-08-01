@@ -1,0 +1,8 @@
+src/.env
+.env
+node_modules/
+.idea/
+.cache/
+.claude/settings.local.json
+
+scripts.mjs
