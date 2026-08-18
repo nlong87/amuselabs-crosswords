@@ -9,6 +9,7 @@ import {
     waitForNavOrDelay,
     navigateToDatedPuzzle,
     finishRun,
+    clickUntilVisible,
 } from '../browser.mjs';
 
 export async function runAtlantic( targetDate ) {
@@ -35,22 +36,20 @@ export async function runAtlantic( targetDate ) {
         throw e;
     }
     
-    // Click the hamburger menu link
-    const hamburgerMenu = await puzzleFrame.$('#navbarContent .nav-item:first-child');
-    const hamburgerMenuLink = await hamburgerMenu.$('a');
-    await hamburgerMenuLink.click();
-    
+    // Dismiss the interstitial before going near the navbar — it and the
+    // player-info modal sit over the hamburger toggle and silently swallow
+    // clicks aimed at it. The toggle itself is the <a data-bs-toggle>, not the
+    // <li>; clicking it twice would just close the menu again.
     await clickIfPresent( puzzleFrame, '.modal-content .close');
-    
-    await hamburgerMenuLink.click();
-    
-    // Wait for the dropdown menu to appear
-    const dropdownMenu = await hamburgerMenu.waitForSelector('.dropdown-menu', {
-        visible: true
-    });
-    
-    // Click the Puzzle Archive link
-    const archiveLink = await dropdownMenu.$('.puzzle-list a');
+
+    // Open the menu and take the Puzzle Archive link once it has actually
+    // appeared — the toggle can be clickable before its handler is bound, so
+    // the first click is sometimes a silent no-op.
+    const archiveLink = await clickUntilVisible(
+        puzzleFrame,
+        '#navbarContent .nav-item:first-child a.dropdown-toggle',
+        '.dropdown-menu.show .puzzle-list a',
+    );
     await archiveLink.click();
 
     await waitForNavOrDelay( puzzleFrame );

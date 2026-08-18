@@ -8,6 +8,7 @@ import {
     waitForAmuselabsFrame,
     clickIfPresent,
     finishRun,
+    BLOCKED_AD_DOMAINS,
 } from '../browser.mjs';
 
 // An interstitial modal on the main page can appear on top of the picker
@@ -15,21 +16,6 @@ import {
 // iframe itself, so the tile reads as clickable even while this modal is
 // covering it and silently swallowing the click.
 const MODAL_CLOSE_SELECTOR = 'xpath//html/body/div[5]/div[3]/div/div/div/button';
-
-// AmuseLabs' picker-min.js (loaded directly on the vox.com page, not sandboxed
-// in an iframe) blanks out document.body while it waits on these ad/verification
-// vendors to finish initializing. When they're slow or fail to load — which
-// they routinely are/do — the picker never recovers and the page stays blank
-// forever. None of these are needed to reach the puzzle, so block them outright.
-const BLOCKED_AD_DOMAINS = [
-    'permutive.com',
-    'doubleverify.com',
-    'confiant-integrations.net',
-    'connatix.com',
-    'crwdcntrl.net',
-    'liadm.com',
-    'amazon-adsystem.com',
-];
 
 export async function runVox( targetDate ) {
 

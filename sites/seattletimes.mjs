@@ -8,6 +8,7 @@ import {
     waitForNavOrDelay,
     navigateToDatedPuzzle,
     finishRun,
+    clickUntilVisible,
 } from '../browser.mjs';
 
 async function run( type = 'large',  targetDate ) {
@@ -29,17 +30,17 @@ async function run( type = 'large',  targetDate ) {
     // Close the modal box
     await clickIfPresent( puzzleFrame, '#footer-btn' );
 
-    // Click the hamburger menu link
-    const hamburgerMenu = await puzzleFrame.$('#navbarContent .nav-item:first-child');
-    await hamburgerMenu.click();
-
-    // Wait for the dropdown menu to appear
-    const dropdownMenu = await hamburgerMenu.waitForSelector('.dropdown-menu', {
-        visible: true
-    });
-
-    // Click the Puzzle Archive link
-    const archiveLink = await dropdownMenu.$('.puzzle-list');
+    // The hamburger toggle is the <a data-bs-toggle="dropdown">, not the <li>
+    // wrapper, and the player-info modal dismissed above keeps covering it for
+    // ~1s while it fades out, silently swallowing clicks aimed at it. It can
+    // also be clickable before its handler is bound, making the first click a
+    // no-op. clickUntilVisible waits out the overlay and verifies the menu
+    // actually opened, retrying if it did not.
+    const archiveLink = await clickUntilVisible(
+        puzzleFrame,
+        '#navbarContent .nav-item:first-child a.dropdown-toggle',
+        '.dropdown-menu.show .puzzle-list',
+    );
     await archiveLink.click();
 
     await waitForNavOrDelay( puzzleFrame );

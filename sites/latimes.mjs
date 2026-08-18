@@ -4,7 +4,7 @@ import {
     formatDate,
     waitForAmuselabsFrame,
     navigateToDatedPuzzle,
-    finishRun,
+    finishRun, BLOCKED_AD_DOMAINS,
 } from '../browser.mjs';
 
 async function run( type = 'daily',  targetDate ) {
@@ -15,7 +15,7 @@ async function run( type = 'daily',  targetDate ) {
     const target_url = type === 'daily' ? daily_url : mini_url;
     const date_search = type === 'daily' ?  formatDate(targetDate, 'yyMMdd') : formatDate(targetDate, 'yyyyMMdd');
 
-    const [browser, page] = await getPuppeteerBrowser(target_url);
+    const [browser, page] = await getPuppeteerBrowser(target_url, { blockDomains: BLOCKED_AD_DOMAINS });
 
     const selector = 'pierce/a[data-tos-handler="accept-tos"]';
 

@@ -24,7 +24,26 @@ export function setPuzzleFrame(frame) {
     jsFiles = new Set();
 }
 
-export async function getPuppeteerBrowser( url, { blockDomains = [], cookies = [] } = {} ) {
+// Ad/verification vendors that host pages routinely stall on. AmuseLabs'
+// picker-min.js — when loaded directly on the host page rather than sandboxed
+// in an iframe — blanks out document.body while it waits on these to finish
+// initializing, and when they're slow or fail to load (which they routinely
+// are/do) the picker never recovers and the page stays blank forever. None of
+// them are needed to reach a puzzle, so they're blocked for every site by
+// default (see `blockDomains` below); pass an explicit list to override.
+export const BLOCKED_AD_DOMAINS = [
+    'permutive.com',
+    'doubleverify.com',
+    'confiant-integrations.net',
+    'connatix.com',
+    'crwdcntrl.net',
+    'liadm.com',
+    'amazon-adsystem.com',
+    'doubleclick.net',
+    'rtb.openx.net'
+];
+
+export async function getPuppeteerBrowser( url, { blockDomains = BLOCKED_AD_DOMAINS, cookies = [] } = {} ) {
 
     scriptSources = new Map();
     jsFiles = new Set();
@@ -58,21 +77,24 @@ export async function getPuppeteerBrowser( url, { blockDomains = [], cookies = [
         await page.setCookie(...cookies);
     }
 
+    // Block at the network layer via CDP rather than page.setRequestInterception.
+    // Interception routes every request through the Fetch domain, after which
+    // Network.getResponseBody can no longer return bodies for continued
+    // requests — so trackResponses' res.text() silently captures nothing,
+    // scriptSources stays empty, and the run dies with the misleading
+    // "Decoder function not found". setBlockedURLs drops the matching requests
+    // without touching the bodies of the ones we let through.
     if ( blockDomains.length ) {
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            const reqUrl = req.url();
-            if ( blockDomains.some((d) => reqUrl.includes(d)) ) {
-                req.abort();
-            } else {
-                req.continue();
-            }
+        const blockClient = await page.createCDPSession();
+        await blockClient.send('Network.enable');
+        await blockClient.send('Network.setBlockedURLs', {
+            urls: blockDomains.map((d) => `*${d}*`),
         });
     }
 
     await page.goto(url, {
         waitUntil: 'domcontentloaded',
-        timeout: 30000
+        timeout: 10000
     });
 
     return [browser, page];
@@ -388,7 +410,30 @@ export async function randomScroll(page, min = 400, max = 1000) {
 
 export async function waitForAmuselabsFrame(page, { selector = 'iframe[src*="amuselabs.com"]', timeout = 35000 } = {}) {
     const iframeElement = await page.waitForSelector(selector, { timeout });
-    const puzzleFrame = await iframeElement.contentFrame();
+
+    // The iframe element matches on its src attribute as soon as it's
+    // inserted, which can be before the frame's document has been swapped in.
+    // Wait for the document to finish loading before handing the frame back —
+    // this is what makes the LA Times mini reliable (see the note on
+    // pollForElement below for the failure it avoids).
+    const deadline = Date.now() + timeout;
+    let puzzleFrame = await iframeElement.contentFrame();
+    while (Date.now() < deadline) {
+        const frame = await iframeElement.contentFrame();
+        const frameUrl = frame?.url() || '';
+        if (frame && frameUrl && frameUrl !== 'about:blank') {
+            try {
+                if (await frame.evaluate(() => document.readyState) === 'complete') {
+                    puzzleFrame = frame;
+                    break;
+                }
+            } catch (e) {
+                // context destroyed mid-navigation — keep polling
+            }
+        }
+        await delay(250);
+    }
+
     setPuzzleFrame(puzzleFrame);
     return puzzleFrame;
 }
@@ -403,39 +448,158 @@ export async function waitForNavOrDelay(frame, { timeout = 15000, fallbackDelay 
     }
 }
 
+// waitForSelector is not reliable on these picker frames. A wait started while
+// the freshly-navigated cross-origin frame is still settling binds to an
+// execution context that gets destroyed, and it never re-arms — it hangs for
+// its full timeout with the element sitting right there. Measured on LA Times:
+// evaluate()/$() returned the tile on every poll from 19s onward while a
+// waitForSelector issued at 19s was still rejecting 45s later. $() re-resolves
+// the context on each call, so polling it is immune to that race.
+export async function pollForElement(context, selector, timeout) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+        try {
+            const handle = await context.$(selector);
+            if (handle && await handle.isVisible()) return handle;
+        } catch (e) {
+            // context torn down mid-poll — retry until the deadline
+        }
+        await delay(250);
+    }
+    throw new Error(`Waiting for selector \`${selector}\` failed`);
+}
+
+// Puppeteer's click does real hit-testing, so a click aimed at a covered
+// element silently lands on whatever is on top instead — no error thrown,
+// nothing happens. AmuseLabs' player-info modal does exactly this: dismissing
+// it via #footer-btn starts a fade-out, but it stays display:block/opacity:1
+// over the navbar for ~1s afterwards and swallows any click aimed at the
+// hamburger menu in that window. Wait until the element really is the topmost
+// thing at its own centre point, then click it.
+export async function clickWhenUnobstructed(context, selector, timeout = 15000) {
+    const deadline = Date.now() + timeout;
+    let lastBlocker = 'element never found';
+    while (Date.now() < deadline) {
+        try {
+            const handle = await context.$(selector);
+            if (handle && await handle.isVisible()) {
+                const blocker = await handle.evaluate((el) => {
+                    const r = el.getBoundingClientRect();
+                    const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+                    if (!top) return 'no element at point';
+                    if (top === el || el.contains(top)) return null;
+                    return top.tagName + '.' + String(top.className).slice(0, 40);
+                });
+                if (blocker === null) {
+                    await handle.click();
+                    return handle;
+                }
+                lastBlocker = blocker;
+            }
+        } catch (e) {
+            lastBlocker = e.message.split('\n')[0].slice(0, 60);
+        }
+        await delay(250);
+    }
+    throw new Error(`\`${selector}\` never became clickable (blocked by: ${lastBlocker})`);
+}
+
+
+// Same no-op-click race as navigateToDatedPuzzle, one layer up: a Bootstrap
+// dropdown toggle can be present, visible and unobstructed before its handler
+// is bound, so the click does nothing and the menu never opens. Click, verify
+// the thing we expected actually appeared, and retry if it didn't. The wait
+// between attempts is generous enough that a menu which did open is always
+// seen — re-clicking a toggle would just close it again.
+export async function clickUntilVisible(context, clickSelector, expectSelector, {
+    attempts = 3,
+    expectTimeout = 4000,
+    clickTimeout = 15000,
+} = {}) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        await clickWhenUnobstructed(context, clickSelector, clickTimeout);
+        try {
+            return await pollForElement(context, expectSelector, expectTimeout);
+        } catch (e) {
+            console.log(`Click ${attempt}/${attempts} on \`${clickSelector}\` produced no \`${expectSelector}\``);
+            await delay(500);
+        }
+    }
+    throw new Error(`\`${clickSelector}\` never produced \`${expectSelector}\``);
+}
 export async function navigateToDatedPuzzle(puzzleFrame, dateSearch, {
     attr = 'data-id',
-    findTimeout = 55000,
+    findTimeout = 15000,
     navTimeout = 15000,
     soft = false,
 } = {}) {
     const targetSelector = `[${attr}*="${dateSearch}"]`;
 
-    if (soft) {
+    // A tile can be present and visible before the picker has bound its click
+    // handler, so an immediate click is silently a no-op — the frame never
+    // navigates and we end up decoding the picker page instead of a puzzle,
+    // which surfaces as the misleading "Decoder function not found" (the picker
+    // has its own #params, just no crossword decoder). Give the handler a
+    // moment to attach, then retry if nothing moved. Only retry when the url is
+    // genuinely unchanged: a navigation that happened while networkidle2 merely
+    // failed to settle must not be clicked a second time.
+    const MAX_CLICK_ATTEMPTS = 3;
+    const SETTLE_MS = 1000;
+    const startUrl = puzzleFrame.url();
+
+    await delay(SETTLE_MS);
+
+    for (let attempt = 1; attempt <= MAX_CLICK_ATTEMPTS; attempt++) {
         let target;
         try {
-            target = await puzzleFrame.waitForSelector(targetSelector, { timeout: findTimeout, visible: true });
+            target = await pollForElement(puzzleFrame, targetSelector, findTimeout);
         } catch (e) {
-            console.log('Failed to find target element:', e.message);
-            return;
+            // soft callers treat a missing tile as "nothing to do"; everyone
+            // else wants the failure surfaced rather than silently decoding
+            // whatever page happens to be loaded.
+            if (soft) {
+                console.log('Failed to find target element:', e.message);
+                return;
+            }
+            throw e;
         }
+
+        // Don't burn the full navTimeout on a click that never registered; the
+        // last attempt gets the real budget for a genuinely slow load.
+        const attemptTimeout = attempt < MAX_CLICK_ATTEMPTS
+            ? Math.min(navTimeout, 6000)
+            : navTimeout;
+
         try {
             await target.click();
-            await puzzleFrame.waitForNavigation({ waitUntil: 'networkidle2', timeout: navTimeout });
+            await puzzleFrame.waitForNavigation({ waitUntil: 'networkidle2', timeout: attemptTimeout });
+            return;
         } catch (e) {
-            console.log('Failed to navigate to target:', e.message);
+            if (puzzleFrame.url() !== startUrl) return; // navigated; idle just never settled
+            console.log(`Click ${attempt}/${MAX_CLICK_ATTEMPTS} did not navigate:`, e.message);
+            // Let any in-flight mouse state clear before clicking again,
+            // otherwise puppeteer throws "'left' is already pressed".
+            await delay(SETTLE_MS);
         }
-    } else {
-        await puzzleFrame.waitForSelector(targetSelector, { visible: true, timeout: findTimeout });
-        const target = await puzzleFrame.$(targetSelector);
-        await target.click();
-        await waitForNavOrDelay(puzzleFrame, { timeout: navTimeout });
     }
+
+    // Never navigated. Some widgets swap content in place without firing a
+    // navigation event, so settle briefly and let the caller try to decode
+    // rather than failing outright here.
+    console.log('Target never navigated: still on', puzzleFrame.url());
+    await delay(3000);
 }
 
 export async function finishRun(puzzleFrame, page, browser) {
-    const decoded = await getDecodedJson( puzzleFrame );
-    stopTracking( page );
-    await browser.close();
-    return decoded;
+    // Tear the browser down even when decoding throws. Closing only on the
+    // success path leaks the whole Chrome instance on every failed run, and
+    // because puppeteer's open connection keeps the event loop alive the node
+    // process then never exits — a failing runner hangs the test script
+    // indefinitely instead of just reporting FAIL.
+    try {
+        return await getDecodedJson( puzzleFrame );
+    } finally {
+        stopTracking( page );
+        await browser.close().catch(() => {});
+    }
 }

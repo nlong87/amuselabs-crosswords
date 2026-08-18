@@ -6,13 +6,13 @@ import {
     randomScroll,
     waitForAmuselabsFrame,
     navigateToDatedPuzzle,
-    finishRun,
+    finishRun, clickIfPresent,
 } from '../browser.mjs';
 
 export async function runDailyBeast( targetDate ) {
 
     const url = 'https://www.thedailybeast.com/crossword-puzzles/';
-    const date_search = formatDate(targetDate, 'MMMM d, yyyy');
+    const date_search = formatDate(targetDate, 'MMM. d, yyyy');
 
     const [browser, page] = await getPuppeteerBrowser(url);
 
@@ -22,8 +22,7 @@ export async function runDailyBeast( targetDate ) {
     const puzzleFrame = await waitForAmuselabsFrame(page, { timeout: 5000 });
 
     // Click the play button to start any potential ads
-    const adPlayButton = await puzzleFrame.$('img[aria-label="Play/Pause"]');
-    await adPlayButton.click();
+    await clickIfPresent(puzzleFrame, 'img[aria-label="Play/Pause"]');
 
     startTracking( page );
 
