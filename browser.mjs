@@ -385,6 +385,16 @@ function parseYmd(dateStr) {
     return parse(dateStr, 'yyyy-MM-dd', new Date());
 }
 
+// These sites key their puzzle archives to the US Pacific calendar day, so
+// "today" has to mean today in Pacific time regardless of what timezone this
+// runs in — toISOString() is UTC and rolls over ~5-8h too early. en-CA is
+// used purely because it formats as yyyy-MM-dd.
+const PACIFIC_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' });
+
+export function pacificDate( date = new Date() ) {
+    return PACIFIC_DAY.format( date );
+}
+
 export function getRandomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }

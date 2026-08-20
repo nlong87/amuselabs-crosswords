@@ -6,6 +6,7 @@ import { runNewsday } from '../sites/newsday.mjs';
 import { runSeattleTimesLarge, runSeattleTimesMini } from '../sites/seattletimes.mjs';
 import { runVox } from '../sites/vox.mjs';
 import { runVulture } from '../sites/vulture.mjs';
+import { pacificDate } from '../browser.mjs';
 
 const RUNNERS = {
     atlantic: runAtlantic,
@@ -19,13 +20,6 @@ const RUNNERS = {
     vox: runVox,
     vulture: runVulture
 };
-
-// These sites key their puzzle archives to the US Pacific calendar day, so
-// "today" has to mean today in Pacific time regardless of what timezone this
-// script runs in — toISOString() is UTC and rolls over ~5-8h too early.
-function today() {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
-}
 
 // Runners return a base64-encoded JSON payload — decode it to confirm
 // it's actually a usable puzzle, not just a truthy string.
@@ -48,7 +42,7 @@ async function testRunner(name, fn, targetDate) {
 async function main() {
     const args = process.argv.slice(2);
     const dateArg = args.find(a => /^\d{4}-\d{2}-\d{2}$/.test(a));
-    const targetDate = dateArg || today();
+    const targetDate = dateArg || pacificDate();
     const requested = args.filter(a => a !== dateArg);
 
     const unknown = requested.filter(name => !RUNNERS[name]);
