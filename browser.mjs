@@ -104,9 +104,14 @@ const COOKIE_CACHE_DIR = path.join(process.cwd(), '.cache', 'cookies');
 
 // Sites that require a real login (e.g. Newsday's subscriber-only crossword)
 // are slow and more failure-prone than a plain page load. Cache the session
-// cookies to disk so a warm server instance can skip the login flow on
-// repeat requests — callers should still fall back to a fresh login if the
-// cached session turns out to be expired.
+// cookies so the login flow can be skipped on repeat requests — callers should
+// still fall back to a fresh login if the cached session turns out to be
+// expired.
+//
+// In production this directory is a Cloud Storage bucket mounted over FUSE, so
+// the cache outlives any single container and is shared by every instance —
+// Cloud Run's own filesystem is per-instance and in-memory, which meant a cold
+// start re-authenticated every time. Locally it's just a directory on disk.
 export function readCachedCookies(name) {
     try {
         const raw = fs.readFileSync(path.join(COOKIE_CACHE_DIR, `${name}.json`), 'utf8');
@@ -118,9 +123,18 @@ export function readCachedCookies(name) {
 }
 
 export async function cacheCookies(page, name) {
-    const cookies = await page.cookies();
-    fs.mkdirSync(COOKIE_CACHE_DIR, { recursive: true });
-    fs.writeFileSync(path.join(COOKIE_CACHE_DIR, `${name}.json`), JSON.stringify(cookies));
+    // Over the bucket mount this write is a network call with its own failure
+    // modes, and callers await it *after* the puzzle frame is already in hand.
+    // The saved session is only ever an optimization, so a failure here must
+    // not take down a run whose puzzle decoded fine — readCachedCookies
+    // already degrades to null the same way.
+    try {
+        const cookies = await page.cookies();
+        fs.mkdirSync(COOKIE_CACHE_DIR, { recursive: true });
+        fs.writeFileSync(path.join(COOKIE_CACHE_DIR, `${name}.json`), JSON.stringify(cookies));
+    } catch (e) {
+        console.log(`Failed to cache ${name} session (continuing): ${e.message}`);
+    }
 }
 
 export async function clickIfPresent(context, selector, timeoutMs = 5000) {
