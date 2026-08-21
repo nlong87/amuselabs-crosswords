@@ -18,7 +18,7 @@
     "test:seattletimesmini": "node tests/run-runners.mjs seattletimesmini",
     "test:vox": "node tests/run-runners.mjs vox",
     "test:vulture": "node tests/run-runners.mjs vulture",
-    "build": "gcloud run deploy crossword-decoder --source . --region us-west1 --memory 2Gi --cpu 2 --timeout 300 --concurrency 1 --no-allow-unauthenticated"
+    "build": "gcloud run deploy crossword-decoder --source . --region us-west1 --memory 2Gi --cpu 2 --timeout 300 --concurrency 1 --no-allow-unauthenticated --set-secrets=NEWSDAY_EMAIL=NEWSDAY_EMAIL:latest,NEWSDAY_PASSWORD=NEWSDAY_PASSWORD:latest"
   },
   "dependencies": {
     "acorn": "^8.17.0",

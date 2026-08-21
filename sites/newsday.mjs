@@ -34,46 +34,72 @@ export async function runNewsday( targetDate ) {
 
     const [browser, page] = await getPuppeteerBrowser( url, { cookies: cachedCookies || [] } );
 
-    await randomDelay();
+    try {
+        await randomDelay();
 
-    await clickIfPresent( page, '.onetrust-close-btn-handler' );
+        await clickIfPresent( page, '.onetrust-close-btn-handler' );
 
-    // page.$() doesn't wait for the header to hydrate, so it can race a
-    // freshly-loaded page and wrongly read as "already logged in" — give it
-    // a real wait before deciding.
-    const stillLoggedOut = await page
-        .waitForSelector( NOT_LOGGED_IN_SELECTOR, { timeout: 5000 } )
-        .then( () => true )
-        .catch( () => false );
-    if ( stillLoggedOut ) {
-        console.log( 'Newsday: cached session expired or absent, logging in' );
-        await clickIfPresent( page, NOT_LOGGED_IN_SELECTOR );
+        // page.$() doesn't wait for the header to hydrate, so it can race a
+        // freshly-loaded page and wrongly read as "already logged in" — give it
+        // a real wait before deciding.
+        const stillLoggedOut = await page
+            .waitForSelector( NOT_LOGGED_IN_SELECTOR, { timeout: 5000 } )
+            .then( () => true )
+            .catch( () => false );
+        if ( stillLoggedOut ) {
+            console.log( 'Newsday: cached session expired or absent, logging in' );
 
-        // The login trigger sometimes lands on a subscription offer modal
-        // instead of the login form directly (server-side meter state, not
-        // something we control) — click through its own "Log in" link if so.
-        await clickIfPresent( page, 'a#MG2login.login-link' );
+            // page.type() iterates the string it's handed, so an unset credential
+            // surfaces as a bare "text is not iterable" thrown from inside
+            // puppeteer, pointing at nothing useful. These come from .env
+            // locally, which is deliberately kept out of the image — a
+            // deployment has to supply them itself, so name what's missing.
+            const { NEWSDAY_EMAIL, NEWSDAY_PASSWORD } = process.env;
+            const missing = [
+                NEWSDAY_EMAIL ? null : 'NEWSDAY_EMAIL',
+                NEWSDAY_PASSWORD ? null : 'NEWSDAY_PASSWORD',
+            ].filter( Boolean );
+            if ( missing.length ) {
+                throw new Error( `Newsday needs a subscriber login, but ${missing.join( ' and ' )} ` +
+                    `${missing.length > 1 ? 'are' : 'is'} not set in this environment` );
+            }
 
-        await page.waitForSelector( EMAIL_SELECTOR, { visible: true, timeout: 15000 } );
-        await page.type( EMAIL_SELECTOR, process.env.NEWSDAY_EMAIL, { delay: 30 } );
-        await page.type( PASSWORD_SELECTOR, process.env.NEWSDAY_PASSWORD, { delay: 30 } );
-        await page.click( LOGIN_SUBMIT_SELECTOR );
+            await clickIfPresent( page, NOT_LOGGED_IN_SELECTOR );
+
+            // The login trigger sometimes lands on a subscription offer modal
+            // instead of the login form directly (server-side meter state, not
+            // something we control) — click through its own "Log in" link if so.
+            await clickIfPresent( page, 'a#MG2login.login-link' );
+
+            await page.waitForSelector( EMAIL_SELECTOR, { visible: true, timeout: 15000 } );
+            await page.type( EMAIL_SELECTOR, NEWSDAY_EMAIL, { delay: 30 } );
+            await page.type( PASSWORD_SELECTOR, NEWSDAY_PASSWORD, { delay: 30 } );
+            await page.click( LOGIN_SUBMIT_SELECTOR );
+        }
+
+        // Once authorized, the page swaps #game-block's spinner for the
+        // amuselabs date-picker iframe in place — no reload needed.
+        const puzzleFrame = await waitForAmuselabsFrame( page, { timeout: 20000 } );
+
+        // Confirmed logged in at this point (cached session was still valid, or
+        // the fresh login above just succeeded) — refresh the cache either way
+        // so its expiry keeps sliding forward.
+        await cacheCookies( page, COOKIE_CACHE_NAME );
+
+        startTracking( page );
+
+        // Clicking a tile navigates this same iframe in place from the picker
+        // to the actual crossword.
+        await navigateToDatedPuzzle( puzzleFrame, date_search );
+
+        return await finishRun( puzzleFrame, page, browser );
+    } catch ( e ) {
+        // Bailing out before finishRun would otherwise leak the whole Chrome
+        // instance — puppeteer's open connection keeps the event loop alive, so
+        // a failed login piles up zombie browsers on a warm instance instead of
+        // just returning the error. finishRun closes the browser itself, so this
+        // only has to cover the paths that never reach it.
+        await browser.close().catch( () => {} );
+        throw e;
     }
-
-    // Once authorized, the page swaps #game-block's spinner for the
-    // amuselabs date-picker iframe in place — no reload needed.
-    const puzzleFrame = await waitForAmuselabsFrame( page, { timeout: 20000 } );
-
-    // Confirmed logged in at this point (cached session was still valid, or
-    // the fresh login above just succeeded) — refresh the cache either way
-    // so its expiry keeps sliding forward.
-    await cacheCookies( page, COOKIE_CACHE_NAME );
-
-    startTracking( page );
-
-    // Clicking a tile navigates this same iframe in place from the picker
-    // to the actual crossword.
-    await navigateToDatedPuzzle( puzzleFrame, date_search );
-
-    return finishRun( puzzleFrame, page, browser );
 }

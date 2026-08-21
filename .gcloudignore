@@ -1,0 +1,15 @@
+# Files not uploaded by `gcloud run deploy --source .`.
+#
+# This file's presence REPLACES gcloud's auto-generated ignore list, which
+# would otherwise pull in .gitignore via #!include. So .env and .cache have to
+# be named here explicitly — without them, local credentials and the cached
+# Newsday session cookies would start being uploaded with the source.
+.git
+.gitignore
+.gcloudignore
+node_modules
+npm-debug.log
+.env
+.cache
+.idea
+.claude
