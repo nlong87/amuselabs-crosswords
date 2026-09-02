@@ -57,6 +57,29 @@ async function assertPublishedOn( page, targetDate ) {
     }
 }
 
+// The puzzle iframe is served with an empty src and the real URL parked in
+// data-crossword-url; a script on the page is what copies one into the other.
+// That script doesn't always run — the adblocker plugin drops it, and ad/consent
+// failures can stall it too — leaving an iframe that never matches
+// `iframe[src*="amuselabs.com"]`, so the run dies waiting for a selector while
+// the URL it needs is sitting right there in the DOM. The attribute is the only
+// part we actually depend on, so set the src ourselves when the page hasn't.
+async function hydratePuzzleFrameSrc( page ) {
+    const IFRAME_SELECTOR = 'iframe[data-crossword-url]';
+    await page.waitForSelector( IFRAME_SELECTOR, { timeout: 20000 } );
+    const src = await page.evaluate( ( selector ) => {
+        const frame = document.querySelector( selector );
+        if ( !frame ) return null;
+        // Leave an already-hydrated frame alone: rewriting the src would reload
+        // it, and the page's own URL carries embed params ours doesn't.
+        if ( frame.src ) return frame.src;
+        frame.src = frame.dataset.crosswordUrl;
+        return frame.src;
+    }, IFRAME_SELECTOR );
+
+    if ( !src ) throw new Error( 'Vulture puzzle iframe has no crossword URL to load' );
+}
+
 export async function runVulture( targetDate ) {
 
     const [browser, page] = await getPuppeteerBrowser( LIST_URL );
@@ -87,6 +110,8 @@ export async function runVulture( targetDate ) {
         if ( puzzleUrl === TODAY_URL ) await assertPublishedOn( page, targetDate );
 
         await randomDelay();
+
+        await hydratePuzzleFrameSrc( page );
 
         // Unlike this repo's other sites, the puzzle is embedded directly on
         // this page with no picker/date-click step afterwards — so its decoder

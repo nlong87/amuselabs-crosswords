@@ -2,12 +2,16 @@ import { format, parse } from 'date-fns';
 import 'dotenv/config';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import AdblockerPlugin from 'puppeteer-extra-plugin-adblocker';
 import vm from 'vm';
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 import fs from 'fs';
 import path from 'path';
 puppeteer.use(StealthPlugin());
+
+// Apply the adblocker plugin to remove ads and trackers
+puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
 
 let scriptSources = new Map();
 let jsFiles = new Set();
@@ -399,6 +403,18 @@ function parseYmd(dateStr) {
     return parse(dateStr, 'yyyy-MM-dd', new Date());
 }
 
+// Some sites label their tiles in AP style, which spells out March through
+// July and abbreviates the rest — so date-fns' 'MMM. d, yyyy' produces
+// "Sep. 1, 2026" and "Jul. 30, 2026" where the page actually reads
+// "Sept. 1, 2026" and "July 30, 2026".
+const AP_MONTHS = ['Jan.', 'Feb.', 'March', 'April', 'May', 'June',
+    'July', 'Aug.', 'Sept.', 'Oct.', 'Nov.', 'Dec.'];
+
+export function formatDateAP( dateStr ) {
+    const d = parseYmd(dateStr);
+    return `${AP_MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
 // These sites key their puzzle archives to the US Pacific calendar day, so
 // "today" has to mean today in Pacific time regardless of what timezone this
 // runs in — toISOString() is UTC and rolls over ~5-8h too early. en-CA is
@@ -557,7 +573,11 @@ export async function navigateToDatedPuzzle(puzzleFrame, dateSearch, {
     navTimeout = 15000,
     soft = false,
 } = {}) {
-    const targetSelector = `[${attr}*="${dateSearch}"]`;
+    // Accept several spellings of the same date: tile labels on some sites are
+    // written by hand, so the exact abbreviation can't be predicted from one
+    // format string. Any of them matching is a hit.
+    const searches = Array.isArray(dateSearch) ? dateSearch : [dateSearch];
+    const targetSelector = searches.map((s) => `[${attr}*="${s}"]`).join(', ');
 
     // A tile can be present and visible before the picker has bound its click
     // handler, so an immediate click is silently a no-op — the frame never

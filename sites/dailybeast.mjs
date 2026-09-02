@@ -2,6 +2,7 @@ import {
     getPuppeteerBrowser,
     startTracking,
     formatDate,
+    formatDateAP,
     randomDelay,
     randomScroll,
     waitForAmuselabsFrame,
@@ -12,7 +13,14 @@ import {
 export async function runDailyBeast( targetDate ) {
 
     const url = 'https://www.thedailybeast.com/crossword-puzzles/';
-    const date_search = formatDate(targetDate, 'MMM. d, yyyy');
+    // The tile labels are written by hand, in AP style — "Sept. 1, 2026",
+    // "July 30, 2026" — so date-fns' 'MMM. d, yyyy' misses on every month AP
+    // abbreviates differently (Sept.) or spells out (March-July). Offer both
+    // spellings rather than betting on one; whichever the editor typed matches.
+    const date_search = [...new Set([
+        formatDateAP(targetDate),
+        formatDate(targetDate, 'MMM. d, yyyy'),
+    ])];
 
     const [browser, page] = await getPuppeteerBrowser(url);
 
