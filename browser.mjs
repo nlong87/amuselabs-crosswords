@@ -403,18 +403,6 @@ function parseYmd(dateStr) {
     return parse(dateStr, 'yyyy-MM-dd', new Date());
 }
 
-// Some sites label their tiles in AP style, which spells out March through
-// July and abbreviates the rest — so date-fns' 'MMM. d, yyyy' produces
-// "Sep. 1, 2026" and "Jul. 30, 2026" where the page actually reads
-// "Sept. 1, 2026" and "July 30, 2026".
-const AP_MONTHS = ['Jan.', 'Feb.', 'March', 'April', 'May', 'June',
-    'July', 'Aug.', 'Sept.', 'Oct.', 'Nov.', 'Dec.'];
-
-export function formatDateAP( dateStr ) {
-    const d = parseYmd(dateStr);
-    return `${AP_MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
-}
-
 // These sites key their puzzle archives to the US Pacific calendar day, so
 // "today" has to mean today in Pacific time regardless of what timezone this
 // runs in — toISOString() is UTC and rolls over ~5-8h too early. en-CA is
@@ -476,6 +464,46 @@ export async function waitForAmuselabsFrame(page, { selector = 'iframe[src*="amu
 
     setPuzzleFrame(puzzleFrame);
     return puzzleFrame;
+}
+
+// AmuseLabs pickers render a #params blob whose streakInfo carries the real
+// publication timestamp for each tile. Tile *labels* are typed by hand and the
+// editor sometimes omits the date outright — Daily Beast shipped Sept. 14, 2026
+// as just "Happy Belated" — so this metadata, not the label, is the reliable way
+// to ask for a given day. Returns the matching puzzle (its puzzleId is the
+// tile's data-id, ready for navigateToDatedPuzzle) or null if nothing was
+// published that day.
+export async function findPuzzleByDate(pickerFrame, targetDate) {
+    const entries = await pickerFrame.evaluate(() => {
+        const raw = document.querySelector('#params')?.textContent;
+        if (!raw) return null;
+        try {
+            return (JSON.parse(raw).streakInfo || [])
+                .map(e => e.puzzleDetails)
+                .filter(d => d?.puzzleId && d?.publicationTime)
+                .map(({ puzzleId, title, publicationTime, publicationTimeZone }) =>
+                    ({ puzzleId, title, publicationTime, publicationTimeZone }));
+        } catch (e) {
+            return null;
+        }
+    });
+
+    // An empty list means the picker changed shape, not that the archive is
+    // empty — worth distinguishing from "nothing published that day".
+    if (!entries?.length) {
+        throw new Error(`Picker at ${pickerFrame.url()} exposed no #params.streakInfo metadata`);
+    }
+
+    return entries.find(e => publicationDay(e) === targetDate) || null;
+}
+
+// Puzzles post at 04:00 ET, which is 01:00 PT — the same calendar day either
+// way, but only by an hour. A site dates its own archive in its own zone and
+// its labels agree with it, so resolve in publicationTimeZone, not Pacific.
+function publicationDay({ publicationTime, publicationTimeZone }) {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: publicationTimeZone || 'America/New_York',
+    }).format(new Date(publicationTime));
 }
 
 export async function waitForNavOrDelay(frame, { timeout = 15000, fallbackDelay = 3000 } = {}) {
