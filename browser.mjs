@@ -675,3 +675,97 @@ export async function finishRun(puzzleFrame, page, browser) {
         await browser.close().catch(() => {});
     }
 }
+
+// Decode a puzzle straight from an AmuseLabs date picker, with no publisher
+// page in front of it. Used by the Atlantic, whose own page has sat behind a
+// Cloudflare block since 2026-11-04. Loaded top-level, the picker is the main
+// frame: tracking matches frames by identity and the main frame survives the
+// click-through navigation, so the puzzle page's decoder script is captured as
+// it was inside the iframe.
+//
+// Not every picker allows it. The Seattle Times' (seattletimes.amuselabs.com)
+// redirects a top-level load to seattletimes.com/entertainment/games/, so it
+// has to stay inside the publisher's iframe (see openPuzzleArchive). curl can't
+// tell the two apart, since the redirect is client-side: test in Puppeteer.
+//
+// A picker only lists recent puzzles (about two weeks), so an older date is
+// a clean "tile not found" rather than a wrong decode.
+export async function runFromPicker( pickerUrl, dateSearch ) {
+    const [browser, page] = await getPuppeteerBrowser(pickerUrl);
+
+    const frame = page.mainFrame();
+    setPuzzleFrame(frame);
+    startTracking(page);
+
+    await randomDelay();
+
+    try {
+        await navigateToDatedPuzzle(frame, dateSearch);
+    } catch (e) {
+        // finishRun() owns the teardown on the normal path; a missing tile
+        // never reaches it, and a leaked Chrome keeps the process alive.
+        await browser.close().catch(() => {});
+        throw e;
+    }
+
+    return finishRun(frame, page, browser);
+}
+
+// Open a puzzle's "Crossword Archive" (its date picker) from inside the
+// publisher's iframe, without the navbar.
+//
+// The navbar route (dismiss the player-info modal with #footer-btn, open the
+// hamburger menu, click the archive item) relies on hit-tested Puppeteer
+// clicks, so anything on top of the navbar swallows them. The modal is the
+// thing on top: it is a Bootstrap `fade` modal, Bootstrap ignores hide() while
+// one is still fading in, and a #footer-btn click landing in that window
+// leaves the modal up for good. On the Seattle Times that failed about one
+// first attempt in seven (2026-10-18 to 11-08): "never became clickable
+// (blocked by: DIV.player-info-modal …)".
+//
+// The archive item is an <a href="#"> whose handler navigates the frame, and
+// it is in the DOM whether or not the menu is open. Its own click() fires that
+// handler regardless of what covers it, so the modal never matters.
+//
+// The frame starts on a `date-picker?…&idx=1` page that opens today's puzzle
+// by itself, so wait for the puzzle page's link before clicking, and treat
+// dated tiles appearing as the only proof that the archive opened.
+export async function openPuzzleArchive( frame, {
+    linkSelector = '.puzzle-list a',
+    tileSelector = '[data-id]',
+    attempts = 3,
+    linkTimeout = 20000,
+    tileTimeout = 8000,
+} = {} ) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        const deadline = Date.now() + linkTimeout;
+        let clicked = false;
+
+        while (!clicked && Date.now() < deadline) {
+            clicked = await frame.evaluate((selector) => {
+                if (!location.pathname.endsWith('/crossword')) return false;
+                const link = document.querySelector(selector);
+                if (!link) return false;
+                link.click();
+                return true;
+            }, linkSelector).catch(() => false); // context torn down mid-navigation: poll again
+
+            if (!clicked) await delay(250);
+        }
+
+        if (!clicked) {
+            throw new Error(`No \`${linkSelector}\` on the puzzle page (frame at ${frame.url()})`);
+        }
+
+        try {
+            await pollForElement(frame, tileSelector, tileTimeout);
+            return;
+        } catch (e) {
+            // The handler can be bound after the link appears, making the
+            // first click a no-op: click again.
+            console.log(`Archive click ${attempt}/${attempts} showed no \`${tileSelector}\` (frame at ${frame.url()})`);
+        }
+    }
+
+    throw new Error(`\`${linkSelector}\` never opened the archive (frame at ${frame.url()})`);
+}

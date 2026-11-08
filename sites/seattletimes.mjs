@@ -2,15 +2,16 @@ import {
     getPuppeteerBrowser,
     startTracking,
     formatDate,
-    clickIfPresent,
     randomDelay,
     waitForAmuselabsFrame,
-    waitForNavOrDelay,
+    openPuzzleArchive,
     navigateToDatedPuzzle,
     finishRun,
-    clickUntilVisible,
 } from '../browser.mjs';
 
+// The puzzle has to be reached through seattletimes.com: its AmuseLabs picker
+// redirects a top-level load to seattletimes.com/entertainment/games/, so the
+// direct route the Atlantic uses (runFromPicker) doesn't work here.
 async function run( type = 'large',  targetDate ) {
 
     let mini_url = 'https://www.seattletimes.com/games-crossword-mini/';
@@ -21,36 +22,27 @@ async function run( type = 'large',  targetDate ) {
 
     const [browser, page] = await getPuppeteerBrowser(target_url);
 
-    await randomDelay();
+    try {
+        await randomDelay();
 
-    const puzzleFrame = await waitForAmuselabsFrame(page, { timeout: 35000 });
+        const puzzleFrame = await waitForAmuselabsFrame(page, { timeout: 35000 });
 
-    await randomDelay();
+        // Straight to the archive, past the player-info modal and the navbar
+        // menu it covers. See openPuzzleArchive for why the modal used to fail
+        // about one first attempt in seven.
+        await openPuzzleArchive( puzzleFrame );
 
-    // Close the modal box
-    await clickIfPresent( puzzleFrame, '#footer-btn' );
+        startTracking( page );
 
-    // The hamburger toggle is the <a data-bs-toggle="dropdown">, not the <li>
-    // wrapper, and the player-info modal dismissed above keeps covering it for
-    // ~1s while it fades out, silently swallowing clicks aimed at it. It can
-    // also be clickable before its handler is bound, making the first click a
-    // no-op. clickUntilVisible waits out the overlay and verifies the menu
-    // actually opened, retrying if it did not.
-    const archiveLink = await clickUntilVisible(
-        puzzleFrame,
-        '#navbarContent .nav-item:first-child a.dropdown-toggle',
-        '.dropdown-menu.show .puzzle-list',
-    );
-    await archiveLink.click();
+        // Navigate to the target Puzzle
+        await navigateToDatedPuzzle( puzzleFrame, date_search );
 
-    await waitForNavOrDelay( puzzleFrame );
-
-    startTracking( page );
-
-    // Navigate to the target Puzzle
-    await navigateToDatedPuzzle( puzzleFrame, date_search );
-
-    return finishRun( puzzleFrame, page, browser );
+        return await finishRun( puzzleFrame, page, browser );
+    } finally {
+        // finishRun() closes it on the normal path; this covers every throw
+        // before it, which used to leak the Chrome instance.
+        await browser.close().catch(() => {});
+    }
 }
 
 export async function runSeattleTimesMini( targetDate ) {
